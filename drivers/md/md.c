@@ -33,6 +33,7 @@
 */
 
 #include <linux/kthread.h>
+#include <linux/freezer.h>
 #include <linux/blkdev.h>
 #include <linux/sysctl.h>
 #include <linux/seq_file.h>
@@ -5306,8 +5307,6 @@ EXPORT_SYMBOL_GPL(md_stop_writes);
 static void __md_stop(struct mddev *mddev)
 {
 	mddev->ready = 0;
-	/* Ensure ->event_work is done */
-	flush_workqueue(md_misc_wq);
 	mddev->pers->stop(mddev);
 	if (mddev->pers->sync_request && mddev->to_remove == NULL)
 		mddev->to_remove = &md_redundancy_group;
@@ -5630,9 +5629,9 @@ static int get_bitmap_file(struct mddev * mddev, void __user * arg)
 	int err = -ENOMEM;
 
 	if (md_allow_write(mddev))
-		file = kzalloc(sizeof(*file), GFP_NOIO);
+		file = kmalloc(sizeof(*file), GFP_NOIO);
 	else
-		file = kzalloc(sizeof(*file), GFP_KERNEL);
+		file = kmalloc(sizeof(*file), GFP_KERNEL);
 
 	if (!file)
 		goto out;
@@ -6223,7 +6222,7 @@ static int update_array_info(struct mddev *mddev, mdu_array_info_t *info)
 	    mddev->ctime         != info->ctime         ||
 	    mddev->level         != info->level         ||
 /*	    mddev->layout        != info->layout        || */
-	    mddev->persistent	 != !info->not_persistent ||
+	    !mddev->persistent	 != info->not_persistent||
 	    mddev->chunk_sectors != info->chunk_size >> 9 ||
 	    /* ignore bottom 8 bits of state, and allow SB_BITMAP_PRESENT to change */
 	    ((state^info->state) & 0xfffffe00)
@@ -7373,11 +7372,14 @@ void md_do_sync(struct md_thread *thread)
 	 *
 	 */
 
+	set_freezable();
+
 	do {
 		mddev->curr_resync = 2;
 
 	try_again:
-		if (kthread_should_stop())
+
+		if (kthread_freezable_should_stop(NULL))
 			set_bit(MD_RECOVERY_INTR, &mddev->recovery);
 
 		if (test_bit(MD_RECOVERY_INTR, &mddev->recovery))
@@ -7399,6 +7401,9 @@ void md_do_sync(struct md_thread *thread)
 					 * time 'round when curr_resync == 2
 					 */
 					continue;
+
+				try_to_freeze();
+
 				/* We need to wait 'interruptible' so as not to
 				 * contribute to the load average, and not to
 				 * be caught by 'softlockup'
@@ -7411,6 +7416,7 @@ void md_do_sync(struct md_thread *thread)
 					       " share one or more physical units)\n",
 					       desc, mdname(mddev), mdname(mddev2));
 					mddev_put(mddev2);
+					try_to_freeze();
 					if (signal_pending(current))
 						flush_signals(current);
 					schedule();
@@ -7541,7 +7547,7 @@ void md_do_sync(struct md_thread *thread)
 						 || kthread_should_stop());
 		}
 
-		if (kthread_should_stop())
+		if (kthread_freezable_should_stop(NULL))
 			goto interrupted;
 
 		sectors = mddev->pers->sync_request(mddev, j, &skipped,
@@ -7585,8 +7591,7 @@ void md_do_sync(struct md_thread *thread)
 			last_mark = next;
 		}
 
-
-		if (kthread_should_stop())
+		if (kthread_freezable_should_stop(NULL))
 			goto interrupted;
 
 
@@ -7763,8 +7768,10 @@ no_add:
  */
 void md_check_recovery(struct mddev *mddev)
 {
-	if (mddev->suspended)
+#ifdef CONFIG_FREEZER
+	if (mddev->suspended || unlikely(atomic_read(&system_freezing_cnt)))
 		return;
+#endif
 
 	if (mddev->bitmap)
 		bitmap_daemon_work(mddev);
