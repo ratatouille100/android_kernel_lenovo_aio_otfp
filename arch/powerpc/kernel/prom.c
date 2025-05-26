@@ -159,7 +159,7 @@ static struct ibm_pa_feature {
 	{CPU_FTR_NOEXECUTE, 0, 0,	0, 6, 0},
 	{CPU_FTR_NODSISRALIGN, 0, 0,	1, 1, 1},
 	{0, MMU_FTR_CI_LARGE_PAGE, 0,	1, 2, 0},
-	{CPU_FTR_REAL_LE, 0, PPC_FEATURE_TRUE_LE, 5, 0, 0},
+	{CPU_FTR_REAL_LE, PPC_FEATURE_TRUE_LE, 5, 0, 0},
 };
 
 static void __init scan_features(unsigned long node, unsigned char *ftrs,
@@ -542,11 +542,6 @@ void __init early_init_dt_add_memory_arch(u64 base, u64 size)
 
 	/* Add the chunk to the MEMBLOCK list */
 	memblock_add(base, size);
-}
-
-void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
-{
-	return __va(memblock_alloc(size, align));
 }
 
 #ifdef CONFIG_BLK_DEV_INITRD
